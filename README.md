@@ -8,6 +8,14 @@ kullanılan yapay zekâ sistemlerini envantere alıp risk seviyesine göre sın�
 
 **Stack:** Next.js 16 (App Router, Turbopack) · TypeScript · PostgreSQL · Prisma 7 (`@prisma/adapter-pg`) · `jose` (JWT oturum)
 
+## 📸 Ekran Görüntüleri
+
+| Dashboard — AI Act özet kartı + kritik vadeler | AI sistem listesi — renk kodlu risk rozetleri |
+|:--:|:--:|
+| ![Dashboard](docs/screenshots/01-dashboard.png) | ![AI Act listesi](docs/screenshots/02-ai-act-list.png) |
+| **Rehberli sınıflandırma anketi (karar ağacı)** | **Yükümlülük kontrol listesi + son tarih** |
+| ![Sınıflandırma anketi](docs/screenshots/03-classification-survey.png) | ![Yükümlülük listesi](docs/screenshots/04-obligations-checklist.png) |
+
 ---
 
 ## ✨ Öne çıkan modül: EU AI Act uyum takibi
