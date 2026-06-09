@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fristen-hub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fristen
+      POSTGRES_PASSWORD: fristen_dev_pw
+      POSTGRES_DB: fristen_hub
+    ports:
+      - "5433:5432"
+    volumes:
+      - fristen_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fristen -d fristen_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  fristen_pgdata:

@@ -1,0 +1,209 @@
+// Fristen-Hub — Prisma schema
+// Tablolar teknik plandaki (fristen-hub-teknik-plan.md, §2) SQL şemasından türetilmiştir.
+// Belge türleri sabit sütunlar yerine esnek `doc_type` + `document` modeliyle tutulur,
+// böylece yeni belge türü eklemek kod değişikliği gerektirmez.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Giriş yapan kullanıcılar (dispoçu, yönetici).
+model AppUser {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         String   @default("editor") // admin | editor | viewer
+  lang         String   @default("de") //     de | tr
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("app_user")
+}
+
+/// Sürücüler.
+model Driver {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  employeeNo String?    @map("employee_no")
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  documents  Document[]
+
+  @@map("driver")
+}
+
+/// Araçlar.
+model Vehicle {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  plate     String     @unique
+  model     String?
+  vin       String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  documents Document[]
+
+  @@map("vehicle")
+}
+
+/// Belge türü tanımları (yapılandırılabilir kurallar).
+/// mode='expiry' → bitiş tarihi; mode='interval' → periyodik okuma (interval_days).
+model DocType {
+  key          String     @id
+  appliesTo    String     @map("applies_to") // driver | vehicle
+  mode         String //                        expiry | interval
+  intervalDays Int?       @map("interval_days") // mode='interval' ise (28, 90)
+  labelDe      String     @map("label_de")
+  labelTr      String     @map("label_tr")
+  documents    Document[]
+
+  @@map("doc_type")
+}
+
+/// Asıl belgeler / fristler. Her belge ya bir sürücüye ya da bir araca bağlıdır
+/// (XOR — DB seviyesinde CHECK kısıtı ile zorlanır; bkz. migration).
+model Document {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  docTypeKey  String    @map("doc_type_key")
+  driverId    String?   @map("driver_id") @db.Uuid
+  vehicleId   String?   @map("vehicle_id") @db.Uuid
+  validUntil  DateTime? @map("valid_until") @db.Date // mode='expiry' için
+  lastAction  DateTime? @map("last_action") @db.Date // mode='interval' için (en son okuma)
+  note        String?
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  docType          DocType           @relation(fields: [docTypeKey], references: [key])
+  driver           Driver?           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle          Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  notificationLogs NotificationLog[]
+
+  @@index([docTypeKey])
+  @@index([driverId])
+  @@index([vehicleId])
+  @@map("document")
+}
+
+/// Gönderilen bildirim kaydı — aynı (belge, eşik) için tekrar gönderimi engeller.
+model NotificationLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  threshold  Int //                           45, 30, 14, 7, 1, 0
+  sentTo     String   @map("sent_to")
+  sentAt     DateTime @default(now()) @map("sent_at") @db.Timestamptz(6)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, threshold]) // her eşik bir kez
+  @@map("notification_log")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EU AI Act (KI-Verordnung) modülü.
+// Tasarım Fristen-Hub deseniyle hizalı: sınıflandırma karar ağacı ve yükümlülük
+// kataloğu koda GÖMÜLMEZ; `doc_type` gibi versiyonlanabilir referans verisinde
+// (ai_ruleset / ai_risk_rule / ai_obligation_template) tutulur. 2026-08-02 son
+// tarihi `v_deadlines` görünümüne UNION ile eklenip mevcut bildirim akışına bağlanır.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Envanterdeki bir yapay zekâ sistemi.
+model AiSystem {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  purpose               String //                              kullanım amacı
+  provider              String //                              internal | third_party
+  thirdPartyName        String?  @map("third_party_name")
+  processesPersonalData Boolean  @default(false) @map("processes_personal_data")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  classifications AiClassification[]
+  obligations     AiObligation[]
+
+  @@map("ai_system")
+}
+
+/// Sınıflandırma kaydı — append-only geçmiş; en güncel satır (classified_at) aktif sonuçtur.
+model AiClassification {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  aiSystemId     String   @map("ai_system_id") @db.Uuid
+  riskLevel      String   @map("risk_level") //                prohibited | high | limited | minimal
+  rationale      String //                                     karar gerekçesi (insan-okur)
+  rulesetVersion String   @map("ruleset_version")
+  classifiedAt   DateTime @default(now()) @map("classified_at") @db.Timestamptz(6)
+
+  aiSystem AiSystem @relation(fields: [aiSystemId], references: [id], onDelete: Cascade)
+
+  @@index([aiSystemId])
+  @@map("ai_classification")
+}
+
+/// Bir AI sistemine ilişkin somut yükümlülük (yüksek risk için şablondan üretilir).
+model AiObligation {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  aiSystemId       String @map("ai_system_id") @db.Uuid
+  key              String //                                   risk_management, data_governance, ...
+  titleDe          String @map("title_de")
+  titleTr          String @map("title_tr")
+  status           String @default("todo") //                  todo | in_progress | done
+  riskLevelTrigger String @map("risk_level_trigger") //        bu yükümlülüğü tetikleyen risk seviyesi
+
+  aiSystem AiSystem @relation(fields: [aiSystemId], references: [id], onDelete: Cascade)
+
+  @@unique([aiSystemId, key])
+  @@index([aiSystemId])
+  @@map("ai_obligation")
+}
+
+/// Versiyonlanabilir kural seti başlığı. Aktif olan, sınıflandırmada kullanılır.
+model AiRuleset {
+  version     String   @id //                                  ör. "2024-1689-v1"
+  labelDe     String   @map("label_de")
+  labelTr     String   @map("label_tr")
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  active      Boolean  @default(true)
+
+  rules                AiRiskRule[]
+  obligationTemplates  AiObligationTemplate[]
+
+  @@map("ai_ruleset")
+}
+
+/// Sınıflandırma karar ağacı — sıralı (ord) evet/hayır soruları.
+/// İlk "evet" denen kuralın result_risk_level'i kazanır; hiçbiri değilse → minimal.
+model AiRiskRule {
+  id              String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rulesetVersion  String @map("ruleset_version")
+  ord             Int //                                        değerlendirme sırası
+  code            String //                                     prohibited, annex_iii, transparency
+  questionDe      String @map("question_de")
+  questionTr      String @map("question_tr")
+  helpDe          String @map("help_de")
+  helpTr          String @map("help_tr")
+  resultRiskLevel String @map("result_risk_level") //           evet → bu seviye
+
+  ruleset AiRuleset @relation(fields: [rulesetVersion], references: [version], onDelete: Cascade)
+
+  @@unique([rulesetVersion, code])
+  @@index([rulesetVersion])
+  @@map("ai_risk_rule")
+}
+
+/// Yükümlülük kataloğu şablonu — risk seviyesine göre ai_obligation üretmekte kullanılır.
+model AiObligationTemplate {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rulesetVersion   String @map("ruleset_version")
+  key              String
+  titleDe          String @map("title_de")
+  titleTr          String @map("title_tr")
+  riskLevelTrigger String @map("risk_level_trigger") //         hangi risk seviyesinde uygulanır
+
+  ruleset AiRuleset @relation(fields: [rulesetVersion], references: [version], onDelete: Cascade)
+
+  @@unique([rulesetVersion, key])
+  @@index([rulesetVersion])
+  @@map("ai_obligation_template")
+}
